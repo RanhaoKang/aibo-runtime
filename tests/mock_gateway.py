@@ -6,6 +6,7 @@ Simulates the scheduler gateway WebSocket server for local testing.
 import asyncio
 import json
 import logging
+import secrets
 import uuid
 from datetime import datetime
 from typing import Dict, Set
@@ -25,6 +26,7 @@ class MockGateway:
         self.port = port
         self.clients: Dict[str, WebSocketServerProtocol] = {}
         self.machine_status: Dict[str, dict] = {}
+        self.valid_tokens: Set[str] = set()  # Track valid tokens
         self.running = False
         
     async def start(self):
@@ -47,20 +49,38 @@ class MockGateway:
         """Stop the gateway"""
         self.running = False
         
+    def generate_token(self) -> str:
+        """Generate a new connection token"""
+        token = secrets.token_urlsafe(32)
+        self.valid_tokens.add(token)
+        return token
+    
+    def validate_token(self, token: str) -> bool:
+        """Validate connection token"""
+        return token in self.valid_tokens
+    
     async def _handle_client(self, websocket: WebSocketServerProtocol, path: str):
         """Handle client connection"""
-        # Get headers
-        headers = dict(websocket.request_headers)
-        machine_id = headers.get("X-Machine-ID", "unknown")
-        api_key = headers.get("X-API-Key", "")
+        # Parse token from URL query params
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(path)
+        params = parse_qs(parsed.query)
         
-        logger.info(f"Client connected: {machine_id} from {websocket.remote_address}")
+        token = params.get("token", [""])[0]
+        machine_id = params.get("machine_id", [""])[0] or f"worker-{secrets.token_hex(4)}"
         
-        if api_key != "test-api-key":
-            logger.warning(f"Invalid API key from {machine_id}")
-            await websocket.close(1008, "Invalid API key")
+        logger.info(f"Client connection attempt: {machine_id} from {websocket.remote_address}")
+        
+        # Validate token
+        if not self.validate_token(token):
+            logger.warning(f"Invalid token from {machine_id}")
+            await websocket.close(1008, "Invalid or expired token")
             return
         
+        # Token is valid, consume it (one-time use)
+        self.valid_tokens.discard(token)
+        
+        logger.info(f"Client connected: {machine_id}")
         self.clients[machine_id] = websocket
         
         try:
@@ -188,6 +208,7 @@ async def interactive_control(gateway: MockGateway):
     print("="*50)
     print("Commands:")
     print("  list                    - List connected machines")
+    print("  url                     - Generate connection URL")
     print("  task <machine_id> <cmd> - Send task to machine")
     print("  session <machine_id> <path> - Send session to machine")
     print("  screenshot <machine_id> - Request screenshot")
@@ -215,6 +236,21 @@ async def interactive_control(gateway: MockGateway):
                     for m in machines:
                         status = m["status"].get("status", {})
                         print(f"  {m['machine_id']}: {status.get('tasks_running', 0)} tasks, CPU {status.get('cpu_percent', 0)}%")
+            
+            elif cmd == "url":
+                # Generate connection URL
+                token = gateway.generate_token()
+                machine_id = f"worker-{secrets.token_hex(4)}"
+                url = f"ws://localhost:8889/runtime?token={token}&machine_id={machine_id}"
+                print("\n" + "="*60)
+                print("Connection URL for new machine:")
+                print("="*60)
+                print(f"\n{url}\n")
+                print("Run on worker machine:")
+                print(f"  scheduler-runtime connect '{url}'")
+                print("\nOr with custom name:")
+                print(f"  scheduler-runtime connect '{url}' --name 'My Worker'")
+                print("="*60 + "\n")
             
             elif cmd == "task" and len(parts) >= 3:
                 machine_id = parts[1]

@@ -84,17 +84,30 @@ class Daemon:
             asyncio.create_task(self.ws.close())
     
     async def _connect(self) -> None:
-        """Establish WebSocket connection"""
-        headers = {
-            "X-Machine-ID": self.config.machine_id,
-            "X-API-Key": self.config.api_key,
-        }
+        """Establish WebSocket connection with token in URL"""
+        # Build connection URL with token
+        gateway_url = self.config.gateway_url
         
-        self._log(f"Connecting to {self.config.gateway_url}...")
+        # Parse existing query params
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        parsed = urlparse(gateway_url)
+        params = parse_qs(parsed.query)
+        
+        # Add token and machine_id
+        params['token'] = [self.config.api_key]
+        params['machine_id'] = [self.config.machine_id]
+        
+        # Rebuild URL
+        new_query = urlencode(params, doseq=True)
+        connection_url = urlunparse((
+            parsed.scheme, parsed.netloc, parsed.path,
+            parsed.params, new_query, parsed.fragment
+        ))
+        
+        self._log(f"Connecting to gateway...")
         
         self.ws = await websockets.connect(
-            self.config.gateway_url,
-            extra_headers=headers,
+            connection_url,
             ping_interval=20,
             ping_timeout=10,
         )

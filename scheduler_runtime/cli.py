@@ -2,6 +2,7 @@
 CLI commands for scheduler-runtime
 """
 import argparse
+import asyncio
 import json
 import os
 import signal
@@ -19,28 +20,73 @@ def get_default_config_path() -> Path:
     return Path.home() / ".scheduler" / "runtime.json"
 
 
-def cmd_start(args: argparse.Namespace) -> int:
-    """Start the runtime daemon"""
-    config_path = Path(args.config) if args.config else get_default_config_path()
-    
+def cmd_connect(args: argparse.Namespace) -> int:
+    """Connect to gateway using token URL"""
+    # Parse the connection URL
     try:
-        config = load_config(config_path)
-    except FileNotFoundError:
-        print(f"Config file not found: {config_path}")
-        print("Run 'scheduler-runtime init' to create a config file")
+        gateway_url, token, suggested_machine_id = parse_connection_url(args.url)
+    except Exception as e:
+        print(f"Invalid connection URL: {e}")
+        print("URL format: ws://host:port/path?token=xxx&machine_id=yyy")
         return 1
     
-    # Override with CLI args
-    if args.foreground:
-        config.foreground = True
-    if args.gateway:
-        config.gateway_url = args.gateway
-    if args.machine_id:
-        config.machine_id = args.machine_id
+    if not token:
+        print("Error: No token found in URL")
+        return 1
     
+    if not gateway_url:
+        print("Error: No gateway URL found")
+        return 1
+    
+    # Use suggested machine ID or generate one
+    machine_id = suggested_machine_id or os.uname().nodename
+    machine_name = args.name or machine_id
+    
+    # Create or update config
+    config_path = get_default_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load existing config if present
+    if config_path.exists():
+        try:
+            config = Config.load(config_path)
+            print(f"Updating existing config: {config_path}")
+        except Exception:
+            config = Config()
+    else:
+        config = Config()
+        print(f"Creating new config: {config_path}")
+    
+    # Update with connection details
+    config.gateway_url = gateway_url
+    config.api_key = token
+    config.machine_id = machine_id
+    config.machine_name = machine_name
+    config.foreground = args.foreground
+    
+    # Save config
+    config.save(config_path)
+    
+    print(f"\n✓ Connected to: {gateway_url}")
+    print(f"✓ Machine ID: {machine_id}")
+    print(f"✓ Config saved to: {config_path}")
+    print()
+    
+    if args.foreground:
+        print("Starting runtime in foreground mode...")
+        print("Press Ctrl+C to stop\n")
+    else:
+        print("Starting runtime in background mode...")
+    
+    # Start the daemon
+    return _start_daemon(config, foreground=args.foreground)
+
+
+def _start_daemon(config: Config, foreground: bool = False) -> int:
+    """Start the daemon with given config"""
     pid_file = PidFile()
     
-    if not args.foreground:
+    if not foreground:
         # Daemonize
         try:
             pid_file.acquire()
@@ -51,8 +97,10 @@ def cmd_start(args: argparse.Namespace) -> int:
         # Fork to background
         if os.fork() > 0:
             # Parent exits
-            time.sleep(0.5)  # Give child time to start
-            print(f"Runtime started (PID: {pid_file.read()})")
+            time.sleep(0.5)
+            pid = pid_file.read()
+            print(f"Runtime started (PID: {pid})")
+            print(f"Logs: ~/.scheduler/logs/runtime.log")
             return 0
         
         # Child process
@@ -74,11 +122,6 @@ def cmd_start(args: argparse.Namespace) -> int:
         with open(log_file, 'a') as f:
             os.dup2(f.fileno(), sys.stdout.fileno())
             os.dup2(f.fileno(), sys.stderr.fileno())
-    else:
-        # Foreground mode
-        print(f"Starting runtime in foreground...")
-        print(f"Config: {config_path}")
-        print(f"Gateway: {config.gateway_url}")
     
     # Run daemon
     daemon = Daemon(config)
@@ -91,17 +134,69 @@ def cmd_start(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGINT, signal_handler)
     
     try:
-        daemon.run()
+        asyncio.run(daemon.run())
     except Exception as e:
         print(f"Runtime error: {e}")
-        if not args.foreground:
+        if not foreground:
             pid_file.release()
         return 1
     finally:
-        if not args.foreground:
+        if not foreground:
             pid_file.release()
     
     return 0
+
+
+def parse_connection_url(url: str) -> tuple[str, str, str]:
+    """
+    Parse connection URL from gateway
+    
+    URL format: ws(s)://host:port/path?token=xxx&machine_id=yyy
+    
+    Returns:
+        (gateway_url, token, suggested_machine_id)
+    """
+    from urllib.parse import urlparse, parse_qs
+    
+    parsed = urlparse(url)
+    
+    # Reconstruct gateway URL without query params
+    gateway_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    
+    # Parse query params
+    params = parse_qs(parsed.query)
+    
+    token = params.get("token", [""])[0]
+    machine_id = params.get("machine_id", [""])[0]
+    
+    return gateway_url, token, machine_id
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    """Start the runtime daemon"""
+    config_path = Path(args.config) if args.config else get_default_config_path()
+    
+    try:
+        config = load_config(config_path)
+    except FileNotFoundError:
+        print(f"Config file not found: {config_path}")
+        print("Run 'scheduler-runtime init' to create a config file")
+        print("Or use 'scheduler-runtime connect <url>' to connect with a token URL")
+        return 1
+    
+    # Override with CLI args
+    if args.foreground:
+        config.foreground = True
+    if args.gateway:
+        config.gateway_url = args.gateway
+    if args.machine_id:
+        config.machine_id = args.machine_id
+    
+    print(f"Starting runtime...")
+    print(f"Gateway: {config.gateway_url}")
+    print(f"Machine: {config.machine_id}")
+    
+    return _start_daemon(config, foreground=args.foreground)
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -226,6 +321,12 @@ def main() -> int:
     
     subparsers = parser.add_subparsers(dest="command", required=True)
     
+    # Connect command (token-based connection)
+    connect_parser = subparsers.add_parser("connect", help="Connect to gateway using token URL")
+    connect_parser.add_argument("url", help="Connection URL from gateway web UI (ws://host:port/path?token=xxx)")
+    connect_parser.add_argument("-n", "--name", help="Machine display name (optional)")
+    connect_parser.add_argument("-f", "--foreground", action="store_true", help="Run in foreground")
+    
     # Start command
     start_parser = subparsers.add_parser("start", help="Start the runtime")
     start_parser.add_argument("-c", "--config", help="Config file path")
@@ -255,6 +356,7 @@ def main() -> int:
     args = parser.parse_args()
     
     commands = {
+        "connect": cmd_connect,
         "start": cmd_start,
         "stop": cmd_stop,
         "status": cmd_status,
