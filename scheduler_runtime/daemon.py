@@ -625,6 +625,20 @@ class Daemon:
         action_type = str(action.get("type") or "").strip()
         if not action_id or not action_type:
             return
+        if action_type == "restart":
+            try:
+                await self._submit_control_report(
+                    action_id,
+                    "completed",
+                    result={"version": self._current_runtime_version()},
+                )
+                self._log(f"Applied restart action {action_id}, restarting runtime")
+                self._restart_requested = True
+                self.stop()
+            except Exception as exc:
+                self._log(f"Restart action {action_id} failed: {exc}")
+                await self._submit_control_report(action_id, "failed", error=str(exc))
+            return
         if action_type != "self_update":
             self._log(f"Ignoring unsupported control action: {action_type}")
             return
