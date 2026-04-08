@@ -10,14 +10,14 @@ import sys
 import time
 from pathlib import Path
 
-from scheduler_runtime.config import Config, load_config
+from scheduler_runtime.config import Config, load_config, runtime_state_dir
 from scheduler_runtime.daemon import Daemon
 from scheduler_runtime.pidfile import PidFile, PidFileError
 
 
 def get_default_config_path() -> Path:
     """Get default config file path"""
-    return Path.home() / ".scheduler" / "runtime.json"
+    return runtime_state_dir() / "runtime.json"
 
 
 def cmd_connect(args: argparse.Namespace) -> int:
@@ -63,6 +63,7 @@ def cmd_connect(args: argparse.Namespace) -> int:
     config.machine_id = machine_id
     config.machine_name = machine_name
     config.foreground = args.foreground
+    config.config_path = str(config_path)
     
     # Save config
     config.save(config_path)
@@ -100,7 +101,7 @@ def _start_daemon(config: Config, foreground: bool = False) -> int:
             time.sleep(0.5)
             pid = pid_file.read()
             print(f"Runtime started (PID: {pid})")
-            print(f"Logs: ~/.scheduler/logs/runtime.log")
+            print(f"Logs: ~/.aibo/logs/runtime.log")
             return 0
         
         # Child process
@@ -112,7 +113,7 @@ def _start_daemon(config: Config, foreground: bool = False) -> int:
             sys.exit(0)
         
         # Redirect stdout/stderr to log file
-        log_dir = Path.home() / ".scheduler" / "logs"
+        log_dir = runtime_state_dir() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "runtime.log"
         
@@ -151,7 +152,8 @@ def parse_connection_url(url: str) -> tuple[str, str, str]:
     """
     Parse connection URL from gateway
     
-    URL format: ws(s)://host:port/path?token=xxx&machine_id=yyy
+    URL format: http(s)://host[:port][/path]?token=xxx&machine_id=yyy
+    Legacy websocket URLs are still accepted.
     
     Returns:
         (gateway_url, token, suggested_machine_id)
@@ -160,8 +162,15 @@ def parse_connection_url(url: str) -> tuple[str, str, str]:
     
     parsed = urlparse(url)
     
-    # Reconstruct gateway URL without query params
-    gateway_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https", "ws", "wss"}:
+        raise ValueError(f"unsupported scheme: {parsed.scheme}")
+
+    base_path = parsed.path.rstrip("/")
+    if scheme in {"ws", "wss"} and base_path == "/ws/runtime":
+        base_path = ""
+    gateway_scheme = "https" if scheme == "wss" else "http" if scheme == "ws" else scheme
+    gateway_url = f"{gateway_scheme}://{parsed.netloc}{base_path}"
     
     # Parse query params
     params = parse_qs(parsed.query)
@@ -191,6 +200,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         config.gateway_url = args.gateway
     if args.machine_id:
         config.machine_id = args.machine_id
+    config.config_path = str(config_path)
     
     print(f"Starting runtime...")
     print(f"Gateway: {config.gateway_url}")
@@ -202,7 +212,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 def cmd_stop(args: argparse.Namespace) -> int:
     """Stop the runtime daemon"""
     pid_file = PidFile()
-    pid = pid_file.read()
+    pid = _resolve_runtime_pid(pid_file)
     
     if not pid:
         print("Runtime not running")
@@ -236,7 +246,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     """Check runtime status"""
     pid_file = PidFile()
-    pid = pid_file.read()
+    pid = _resolve_runtime_pid(pid_file)
     
     if not pid:
         print("Runtime: not running")
@@ -248,12 +258,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         
         # Try to get more info from health endpoint
         try:
-            import urllib.request
-            req = urllib.request.Request('http://localhost:17890/health')
-            with urllib.request.urlopen(req, timeout=1) as resp:
-                data = json.loads(resp.read().decode())
-                print(f"  Uptime: {data.get('uptime', 'unknown')}")
-                print(f"  Tasks: {data.get('tasks_running', 0)} running")
+            data = _read_health()
+            print(f"  Uptime: {data.get('uptime', 'unknown')}")
+            print(f"  Tasks: {data.get('tasks_running', 0)} running")
         except Exception:
             pass
         
@@ -264,9 +271,46 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 1
 
 
+def _read_health() -> dict:
+    import urllib.request
+
+    req = urllib.request.Request("http://127.0.0.1:17890/health")
+    with urllib.request.urlopen(req, timeout=1) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _resolve_runtime_pid(pid_file: PidFile) -> int | None:
+    pid = pid_file.read()
+    if pid:
+        try:
+            os.kill(pid, 0)
+            return pid
+        except ProcessLookupError:
+            pid_file.release()
+        except PermissionError:
+            return pid
+
+    try:
+        health = _read_health()
+    except Exception:
+        return None
+    health_pid = health.get("pid")
+    try:
+        resolved = int(health_pid)
+    except (TypeError, ValueError):
+        return None
+    try:
+        os.kill(resolved, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        return resolved
+    return resolved
+
+
 def cmd_logs(args: argparse.Namespace) -> int:
     """Show runtime logs"""
-    log_file = Path.home() / ".scheduler" / "logs" / "runtime.log"
+    log_file = runtime_state_dir() / "logs" / "runtime.log"
     
     if not log_file.exists():
         print(f"No log file found: {log_file}")
@@ -302,6 +346,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         machine_name=args.machine_name or args.machine_id or os.uname().nodename,
         api_key=args.api_key or "",
     )
+    config.config_path = str(config_path)
     
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config.save(config_path)

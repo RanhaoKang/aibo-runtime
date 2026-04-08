@@ -4,6 +4,7 @@ Health check HTTP server for scheduler-runtime
 Provides endpoints for status monitoring and metrics.
 """
 import json
+import os
 import time
 from datetime import datetime
 from typing import Dict
@@ -58,6 +59,7 @@ class HealthServer:
         
         data = {
             "status": "healthy",
+            "pid": os.getpid(),
             "machine_id": self.config.machine_id,
             "uptime": self._format_duration(uptime),
             "timestamp": datetime.utcnow().isoformat(),

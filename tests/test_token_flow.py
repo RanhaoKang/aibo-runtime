@@ -25,9 +25,9 @@ def test_parse_url():
     print("=" * 50)
     
     test_cases = [
-        "ws://localhost:8889/runtime?token=abc123&machine_id=worker1",
-        "wss://scheduler.example.com/ws/runtime?token=xyz789&machine_id=my-machine",
-        "ws://host:8080/path?token=secret&machine_id=test&extra=value",
+        "http://localhost:8889?token=abc123&machine_id=worker1",
+        "https://scheduler.example.com?token=xyz789&machine_id=my-machine",
+        "http://host:8080/runtime/connect?token=secret&machine_id=test&extra=value",
     ]
     
     for url in test_cases:
@@ -47,7 +47,7 @@ def test_connect_command():
     print("=" * 50)
     
     # Create mock args
-    url = "ws://localhost:8889/runtime?token=test-token-123&machine_id=auto-worker"
+    url = "http://localhost:8889?token=test-token-123&machine_id=auto-worker"
     
     args = argparse.Namespace(
         url=url,
@@ -60,7 +60,7 @@ def test_connect_command():
     print()
     print("This would:")
     print("  1. Parse URL to extract gateway, token, machine_id")
-    print("  2. Save config to ~/.scheduler/runtime.json")
+    print("  2. Save config to ~/.aibo/runtime.json")
     print("  3. Start daemon in foreground mode")
     print()
     
@@ -82,9 +82,9 @@ def test_token_security():
     
     # Test that tokens are extracted correctly
     urls = [
-        ("ws://host/path?token=secret123", "secret123"),
-        ("ws://host/path?token=abc&machine_id=test", "abc"),
-        ("ws://host/path?machine_id=test&token=xyz", "xyz"),
+        ("http://host/path?token=secret123", "secret123"),
+        ("http://host/path?token=abc&machine_id=test", "abc"),
+        ("http://host/path?machine_id=test&token=xyz", "xyz"),
     ]
     
     for url, expected in urls:

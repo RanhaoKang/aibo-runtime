@@ -1,19 +1,19 @@
 {
-  "gateway_url": "ws://localhost:8888/ws/runtime",
+  "gateway_url": "https://runtime-gateway.example.com",
   "api_key": "your-api-key-here",
   "machine_id": "worker-01",
   "machine_name": "Worker 01 (Mac Studio)",
   "heartbeat_interval": 15,
   "reconnect_interval": 5,
   "task_poll_interval": 3,
-  "max_concurrent_tasks": 5,
+  "max_concurrent_tasks": 1,
   "work_dir": "~/scheduler_work",
   "enable_screenshot": true,
   "enable_gui_automation": true,
   "env_vars": {
     "PI_CODING_AGENT_DIR": "~/.pi/agent",
-    "OPENAI_API_KEY": "sk-...",
-    "ANTHROPIC_API_KEY": "sk-ant-...",
+    "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY": "YOUR_ANTHROPIC_API_KEY",
     "DEFAULT_MODEL": "claude-sonnet-4-20250514"
   },
   "bashrc_extra": [

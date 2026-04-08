@@ -21,7 +21,8 @@ class Task:
     def __init__(self, task_id: str, job_config: Dict):
         self.task_id = task_id
         self.job_config = job_config
-        self.session_name = f"scheduler_{task_id}_{datetime.now().strftime('%m%d_%H%M%S')}"
+        requested_session_name = str(job_config.get("session_name") or "").strip()
+        self.session_name = requested_session_name or f"scheduler_{task_id}_{datetime.now().strftime('%m%d_%H%M%S')}"
         self.started_at: Optional[datetime] = None
         self.completed_at: Optional[datetime] = None
         self.exit_code: Optional[int] = None
@@ -175,6 +176,7 @@ class TaskManager:
         return {
             "status": "completed" if task.exit_code == 0 else "failed",
             "task_id": task.task_id,
+            "session_name": task.session_name,
             "exit_code": task.exit_code,
             "stdout": stdout.decode() if stdout else "",
             "stderr": stderr.decode() if stderr else "",

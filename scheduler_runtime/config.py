@@ -5,6 +5,11 @@ import json
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
+
+
+def runtime_state_dir() -> Path:
+    return Path.home() / ".aibo"
 
 
 @dataclass
@@ -14,6 +19,7 @@ class Config:
     # Connection settings
     gateway_url: str = "ws://localhost:8888/ws/runtime"
     api_key: str = ""
+    ssl_ca_file: Optional[str] = None
     
     # Machine identification
     machine_id: str = ""
@@ -25,7 +31,7 @@ class Config:
     task_poll_interval: int = 3   # seconds
     
     # Concurrency settings
-    max_concurrent_tasks: int = 5
+    max_concurrent_tasks: int = 1
     
     # Paths
     work_dir: str = "~/scheduler_work"
@@ -40,6 +46,7 @@ class Config:
     
     # Runtime state (not persisted)
     foreground: bool = field(default=False, repr=False)
+    config_path: str = field(default="", repr=False)
     
     def __post_init__(self):
         if not self.machine_id:
@@ -53,6 +60,7 @@ class Config:
         # Don't save runtime state
         data = asdict(self)
         del data['foreground']
+        del data['config_path']
         
         with open(path, 'w') as f:
             json.dump(data, f, indent=2)
@@ -69,21 +77,42 @@ class Config:
         lines.extend(self.bashrc_extra)
         
         return '\n'.join(lines)
+
+    def gateway_http_base(self) -> str:
+        parsed = urlparse(self.gateway_url)
+        scheme = "https" if parsed.scheme in {"https", "wss"} else "http"
+        return f"{scheme}://{parsed.netloc}"
+
+    def pending_reports_path(self) -> Path:
+        return runtime_state_dir() / "runtime-pending-reports.json"
+
+    def pending_control_reports_path(self) -> Path:
+        return runtime_state_dir() / "runtime-pending-control-reports.json"
+
+    def control_state_path(self) -> Path:
+        return runtime_state_dir() / "runtime-control-state.json"
+
+    def repo_root(self) -> Path:
+        return Path(__file__).resolve().parents[1]
     
     @classmethod
     def load(cls, path: Path) -> "Config":
         """Load config from file"""
         with open(path) as f:
             data = json.load(f)
-        return cls(**data)
+        config = cls(**data)
+        config.config_path = str(path)
+        return config
 
 
 def load_config(path: Optional[Path] = None) -> Config:
     """Load config from file or create default"""
     if path is None:
-        path = Path.home() / ".scheduler" / "runtime.json"
+        path = runtime_state_dir() / "runtime.json"
     
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
     
-    return Config.load(path)
+    config = Config.load(path)
+    config.config_path = str(path)
+    return config

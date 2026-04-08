@@ -4,6 +4,8 @@ PID file management for daemon process
 import os
 from pathlib import Path
 
+from scheduler_runtime.config import runtime_state_dir
+
 
 class PidFileError(Exception):
     """PID file error"""
@@ -15,7 +17,7 @@ class PidFile:
     
     def __init__(self, path: Path = None):
         if path is None:
-            path = Path.home() / ".scheduler" / "runtime.pid"
+            path = runtime_state_dir() / "runtime.pid"
         self.path = path
         self._pid: int = None
     
